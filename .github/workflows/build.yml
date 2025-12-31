@@ -1,4 +1,4 @@
-name: Build
+name: Build-FreeBSD
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    name: Build moments (FreeBSD only, upstream tag)
+    name: Build moments FreeBSD (upstream tag, official style)
 
     steps:
     - name: Fetch latest upstream tag
@@ -23,53 +23,67 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: 'stable'
+        go-version: stable
         check-latest: true
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
         node-version: 20
+        check-latest: false
 
     - name: Install pnpm
       run: npm install -g pnpm
 
-    - name: Build Frontend
+    # 前端：参考官方，用 generate + 拷贝到 backend/public
+    - name: Build frontend (official style)
       run: |
         cd upstream/front
-        pnpm i --frozen-lockfile
-        pnpm build
-        mkdir -p ../backend/router/frontend
-        rm -rf ../backend/router/frontend/dist
-        cp -R dist ../backend/router/frontend/dist
+        # 不要用 --frozen-lockfile，避免 pnpm-lock.yaml 缺失导致报错
+        pnpm install --no-frozen-lockfile
+        pnpm generate
+        # 把静态资源拷贝到 backend/public（参考 Makefile）
+        rm -rf ../backend/public
+        mkdir -p ../backend/public
+        cp -r .output/public/* ../backend/public/
         cd ../..
 
+    # 后端：参考 Makefile 的 flags，自行加上 FreeBSD 目标
     - name: Build FreeBSD binary
       run: |
         cd upstream/backend
-        mkdir -p artifact
 
-        GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 go build -o moments ./cmd/moments/main.go
+        VERSION="${{ steps.upstream.outputs.tag }}"
+        COMMIT_ID=$(git rev-parse HEAD | cut -c1-7)
 
-        cp moments artifact/moments
-        cd artifact
-        tar -czvf ../moments-freebsd-amd64.tar.gz *
+        mkdir -p dist
+
+        GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 \
+        go build -tags prod \
+          -ldflags="-s -w -X main.version=$VERSION -X main.commitId=$COMMIT_ID" \
+          -o dist/moments-freebsd-amd64-$VERSION
+
+        cd dist
+        tar -czvf ../moments-freebsd-amd64-$VERSION.tar.gz moments-freebsd-amd64-$VERSION
         cd ..
+
         cd ../..
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: moments-freebsd
-        path: upstream/backend/moments-freebsd-amd64.tar.gz
+        path: upstream/backend/moments-freebsd-amd64-*.tar.gz
 
     - name: Create release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ github.token }}
       with:
         tag_name: ${{ steps.upstream.outputs.tag }}
-        files: upstream/backend/moments-freebsd-amd64.tar.gz
+        draft: false
+        files: upstream/backend/moments-freebsd-amd64-*.tar.gz
+        fail_on_unmatched_files: true
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@v2
