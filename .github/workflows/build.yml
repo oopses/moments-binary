@@ -6,10 +6,19 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    name: Build moments (FreeBSD only)
+    name: Build moments (FreeBSD only, upstream tag)
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Fetch latest upstream tag
+      id: upstream
+      run: |
+        TAG=$(curl -s https://api.github.com/repos/kingwrcy/moments/tags | jq -r '.[0].name')
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
+        echo "Latest upstream tag: $TAG"
+
+    - name: Clone upstream by tag
+      run: |
+        git clone -b "${{ steps.upstream.outputs.tag }}" https://github.com/kingwrcy/moments.git upstream
 
     - name: Set up Go
       uses: actions/setup-go@v4
@@ -27,17 +36,17 @@ jobs:
 
     - name: Build Frontend
       run: |
-        cd front
+        cd upstream/front
         pnpm i --frozen-lockfile
         pnpm build
         mkdir -p ../backend/router/frontend
         rm -rf ../backend/router/frontend/dist
         cp -R dist ../backend/router/frontend/dist
-        cd ..
+        cd ../..
 
     - name: Build FreeBSD binary
       run: |
-        cd backend
+        cd upstream/backend
         mkdir -p artifact
 
         GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 go build -o moments ./cmd/moments/main.go
@@ -46,27 +55,21 @@ jobs:
         cd artifact
         tar -czvf ../moments-freebsd-amd64.tar.gz *
         cd ..
-        cd ..
+        cd ../..
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: moments-freebsd
-        path: backend/moments-freebsd-amd64.tar.gz
-
-    - name: Generate release tag
-      id: tag
-      run: |
-        RELEASE_TAG=$(date +"v%Y.%m.%d-%H%M")
-        echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+        path: upstream/backend/moments-freebsd-amd64.tar.gz
 
     - name: Create release
       uses: softprops/action-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        files: backend/moments-freebsd-amd64.tar.gz
+        tag_name: ${{ steps.upstream.outputs.tag }}
+        files: upstream/backend/moments-freebsd-amd64.tar.gz
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@v2
